@@ -46,7 +46,7 @@ python3 scripts/listar_ativos.py BOVA11 --csv                      # também --j
 ```
 
 ```
-PETR4 - Petrobras PN | raiz PETR | atualizado em: 26/10/2026 | 251 series
+PETR4 - Petrobras PN | raiz PETR | atualizado em: 26/10/2026 | 251 series   (--tipo put --venc 11/2026)
 ----------------------------------------------------
 CODIGO       TIPO  VENCIMENTO  SEM     MARGEM (R$)
 ----------------------------------------------------
