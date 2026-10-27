@@ -21,6 +21,7 @@ URL = "https://investimentos.btgpactual.com/opcoes/margens/"
 # cadastro de instrumentos da B3 (strike e vencimento oficiais de cada serie)
 B3_URL = "https://arquivos.b3.com.br/api/download/requestname?fileName=InstrumentsConsolidatedFile&date={data}"
 B3_DOWNLOAD = "https://arquivos.b3.com.br/api/download/?token={token}"
+B3_COTACAO = "https://cotacao.b3.com.br/mds/api/v1/instrumentQuotation/{ticker}"  # atraso de ~15 min
 CACHE = os.path.join(os.path.expanduser("~"), ".cache", "margens-btg")
 
 # raiz de 4 caracteres da serie de opcoes -> (ticker do ativo-objeto, nome)
@@ -55,7 +56,7 @@ ATIVOS = {
     "DIRR": ("DIRR3", "Direcional Engenharia"),
     "ECOR": ("ECOR3", "EcoRodovias"),
     "EGIE": ("EGIE3", "Engie Brasil Energia"),
-    "EMBJ": ("EMBR3", "Embraer"),
+    "EMBJ": ("EMBJ3", "Embraer (ex-EMBR3)"),
     "ENEV": ("ENEV3", "Eneva"),
     "ENGI": ("ENGI11", "Energisa (unit)"),
     "EQTL": ("EQTL3", "Equatorial Energia"),
@@ -176,8 +177,13 @@ def data_vencimento(letra, wk, atualizado):
     return fr[n - 1] if n <= len(fr) else None
 
 
+APELIDOS = {"EMBR3": "EMBJ", "ELET3": "AXIA", "ELET6": "AXIA"}  # tickers antigos -> raiz atual
+
+
 def raiz_do_ativo(ativo):
     ativo = ativo.upper()
+    if ativo in APELIDOS:
+        return APELIDOS[ativo]
     if ativo in ATIVOS:
         return ativo
     for raiz, (ticker, _nome) in ATIVOS.items():
@@ -191,7 +197,7 @@ def raiz_do_ativo(ativo):
 
 
 def instrumentos_b3(data_ref, force=False):
-    """codigo -> {"strike", "vencimento", "estilo"}, do cadastro de instrumentos da B3.
+    """codigo -> {"strike", "vencimento", "estilo", "ativo"}, do cadastro de instrumentos da B3.
 
     Tenta a data do PDF e ate 7 dias antes. Guarda so as opcoes num CSV pequeno no cache.
     Devolve {} se a B3 nao responder (o script segue com a inferencia pelo codigo).
@@ -200,6 +206,10 @@ def instrumentos_b3(data_ref, force=False):
     for atras in range(8):
         data = base - dt.timedelta(days=atras)
         cache = os.path.join(CACHE, f"instrumentos-{data.isoformat()}.csv")
+        if os.path.exists(cache) and not force:
+            with open(cache, encoding="utf-8") as f:
+                if "ativo" not in f.readline():  # cache de versao anterior, sem a coluna ativo
+                    os.unlink(cache)
         if not os.path.exists(cache) or force:
             print(f"# baixando cadastro de instrumentos da B3 de {data.strftime('%d/%m/%Y')}", file=sys.stderr)
             for tentativa in range(1, 4):  # a API da B3 da 504 de vez em quando
@@ -225,17 +235,32 @@ def instrumentos_b3(data_ref, force=False):
             os.makedirs(CACHE, exist_ok=True)
             with open(cache + ".part", "w", newline="", encoding="utf-8") as f:
                 w = csv.writer(f)
-                w.writerow(["codigo", "strike", "vencimento", "estilo"])
+                w.writerow(["codigo", "strike", "vencimento", "estilo", "ativo"])
                 for x in csv.DictReader(linhas[cab:], delimiter=";"):
                     if x.get("ExrcPric") and x.get("XprtnDt") and SERIE_RE.fullmatch(x["TckrSymb"]):
-                        w.writerow([x["TckrSymb"], x["ExrcPric"].replace(",", "."), x["XprtnDt"], x.get("OptnStyle", "")])
+                        w.writerow([x["TckrSymb"], x["ExrcPric"].replace(",", "."), x["XprtnDt"],
+                                    x.get("OptnStyle", ""), x.get("Asst", "")])
             os.replace(cache + ".part", cache)
         with open(cache, encoding="utf-8") as f:
             return {x["codigo"]: {"strike": float(x["strike"]),
                                   "vencimento": dt.date.fromisoformat(x["vencimento"]),
-                                  "estilo": x["estilo"]} for x in csv.DictReader(f)}
+                                  "estilo": x["estilo"], "ativo": x["ativo"]} for x in csv.DictReader(f)}
     print("# aviso: cadastro da B3 nao encontrado para os ultimos dias", file=sys.stderr)
     return {}
+
+
+def cotacao_b3(ticker):
+    """(preco, "dd/mm HH:MM") do ultimo negocio na B3, ou (None, None)."""
+    try:
+        req = urllib.request.Request(B3_COTACAO.format(ticker=ticker), headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            d = json.load(r)
+        preco = d["Trad"][0]["scty"]["SctyQtn"]["curPrc"]
+        quando = dt.datetime.strptime(d["Msg"]["dtTm"], "%Y-%m-%d %H:%M:%S").strftime("%d/%m %H:%M")
+        return float(preco), quando
+    except Exception as e:
+        print(f"# aviso: cotacao de {ticker} indisponivel ({e})", file=sys.stderr)
+        return None, None
 
 
 def opcoes_do_ativo(texto, raiz, atualizado, b3=None):
@@ -268,6 +293,16 @@ def imprimir_opcoes(a, texto, atualizado):
     ticker, nome = ATIVOS.get(raiz, (a.ativo.upper(), "(raiz nao cadastrada)"))
     b3 = {} if a.sem_b3 else instrumentos_b3(atualizado, a.force)
     ops = opcoes_do_ativo(texto, raiz, atualizado, b3)
+    # ticker do ativo-objeto pelo cadastro da B3 (ex.: EMBJ -> EMBJ3), senao o do dicionario
+    ativos_b3 = collections.Counter(b3[o["codigo"]]["ativo"] for o in ops if o["codigo"] in b3 and b3[o["codigo"]]["ativo"])
+    if ativos_b3:
+        ticker = ativos_b3.most_common(1)[0][0]
+    if a.cotacao is not None:
+        cot, cot_quando = a.cotacao, "informada"
+    elif a.sem_b3:
+        cot, cot_quando = None, None
+    else:
+        cot, cot_quando = cotacao_b3(ticker)
     if a.tipo:
         ops = [o for o in ops if o["tipo"] == a.tipo.upper()]
     if a.semana:
@@ -294,6 +329,7 @@ def imprimir_opcoes(a, texto, atualizado):
     br = lambda v: f"{v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     if a.json:
         print(json.dumps({"atualizado": fmt(atualizado), "ativo": ticker, "nome": nome, "raiz": raiz,
+                          "cotacao": cot, "cotacao_em": cot_quando,
                           "opcoes": [{**o, "vencimento": fmt(o["vencimento"])} for o in ops]},
                          ensure_ascii=False, indent=2))
         return
@@ -305,18 +341,30 @@ def imprimir_opcoes(a, texto, atualizado):
                         fmt(o["vencimento"]), o["semanal"], f"{o['margem']:.2f}"])
         return
 
-    print(f"\n{ticker} - {nome} | raiz {raiz} | atualizado em: {fmt(atualizado)} | {len(ops)} series")
+    print(f"\n{ticker} - {nome} | raiz {raiz} | atualizado em: {fmt(atualizado)} | {len(ops)} series"
+          + (f" | cotacao R$ {br(cot)} ({cot_quando})" if cot is not None else ""))
     print("-" * 66)
     print(f"{'CODIGO':<12} {'STRIKE':>8}  {'TIPO':<5} {'VENCIMENTO':<11} {'SEM':<4} {'MARGEM EXIGIDA':>20}")
     print("-" * 66)
-    anterior = None
+    linha_cot = f" cotacao {ticker} R$ {br(cot)} ".center(66, "=") if cot is not None else None
+    anterior, marcou = None, False
     for o in ops:
-        if anterior and o["vencimento"] != anterior:
-            print()
-        anterior = o["vencimento"]
+        grupo = (o["vencimento"], o["tipo"])
+        if grupo != anterior:
+            if anterior and linha_cot and not marcou:
+                print(linha_cot)  # todos os strikes do grupo abaixo da cotacao
+            if anterior and anterior[0] != o["vencimento"]:
+                print()
+            marcou = False
+        anterior = grupo
+        if linha_cot and not marcou and o["strike"] is not None and o["strike"] > cot:
+            print(linha_cot)
+            marcou = True
         strike = "?" if o["strike"] is None else br(o["strike"])
         print(f"{o['codigo']:<12} {strike:>8}  {o['tipo']:<5} {fmt(o['vencimento']):<11} {o['semanal']:<4} "
               f"{'R$ ' + br(o['margem']):>20}")
+    if anterior and linha_cot and not marcou:
+        print(linha_cot)
     print("-" * 66)
     print("MARGEM EXIGIDA = garantia bloqueada por opcao vendida (R$), do PDF do BTG.")
     sem = sum(o["strike"] is None for o in ops)
@@ -356,6 +404,8 @@ def main():
     ap.add_argument("--tipo", choices=["call", "put"], help="com ATIVO: filtra calls ou puts")
     ap.add_argument("--semana", help="com ATIVO: W1, W2, W4, W5 ou M (mensal); aceita lista, ex.: W1,M")
     ap.add_argument("--venc", help="com ATIVO: filtra pelo vencimento (MM/AAAA ou DD/MM/AAAA)")
+    ap.add_argument("--cotacao", type=lambda v: float(v.replace(",", ".")),
+                    help="com ATIVO: cotacao a usar na linha entre strikes (padrao: ultima da B3)")
     ap.add_argument("--sem-b3", action="store_true", help="com ATIVO: nao consulta a B3 (sem strike; vencimento inferido)")
     ap.add_argument("--pdf", help="usa um PDF local em vez de baixar")
     ap.add_argument("--force", action="store_true", help="ignora o cache e baixa de novo")

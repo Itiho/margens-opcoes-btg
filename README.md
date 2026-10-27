@@ -44,18 +44,19 @@ python3 scripts/listar_ativos.py PETR4
 python3 scripts/listar_ativos.py VALE3 --tipo put --venc 11/2026   # --venc aceita MM/AAAA ou DD/MM/AAAA
 python3 scripts/listar_ativos.py VALE3 --venc 11/2026 --semana M   # W1, W2, W4, W5 ou M (mensal); aceita W1,M
 python3 scripts/listar_ativos.py BOVA11 --csv                      # também --json
-python3 scripts/listar_ativos.py PETR4 --sem-b3                    # não consulta a B3 (sem strike)
+python3 scripts/listar_ativos.py VALE3 --semana W2 --cotacao 60   # linha da cotação num valor dado
+python3 scripts/listar_ativos.py PETR4 --sem-b3                    # não consulta a B3 (sem strike/cotação)
 ```
 
-`PETR4 --tipo put --venc 11/2026 --semana W1`:
+`VALE3 --venc 11/2026 --semana W2 --tipo call` (trecho):
 
 ```
-PETR4 - Petrobras PN | raiz PETR | atualizado em: 26/10/2026 | 41 series
-------------------------------------------------------------------
-CODIGO         STRIKE  TIPO  VENCIMENTO  SEM        MARGEM EXIGIDA
-------------------------------------------------------------------
-PETRW423W1      41,11  PUT   06/11/2026  W1                R$ 2,91
-PETRW425W1      41,36  PUT   06/11/2026  W1                R$ 3,04
+...
+VALEK636W2      63,60  CALL  13/11/2026  W2               R$ 14,26
+VALEK646W2      64,60  CALL  13/11/2026  W2               R$ 13,30
+===================== cotacao VALE3 R$ 64,67 =====================
+VALEK656W2      65,60  CALL  13/11/2026  W2               R$ 12,35
+VALEK666W2      66,60  CALL  13/11/2026  W2               R$ 11,41
 ...
 ```
 
@@ -65,6 +66,8 @@ PETRW425W1      41,36  PUT   06/11/2026  W1                R$ 3,04
   da data do PDF e guardado filtrado em `~/.cache/margens-btg/instrumentos-AAAA-MM-DD.csv` (~2 MB).
   Se a B3 estiver fora (a API dá 504 às vezes; o script tenta 3 vezes), o strike sai `?` e o
   vencimento é inferido pela letra do código.
+- **Linha da cotação**: em cada vencimento e tipo, `=== cotacao VALE3 R$ 64,67 ===` separa os strikes
+  abaixo e acima do preço atual (cotação da B3, atraso de ~15 min). `--cotacao 60` usa um valor seu.
 
 O PDF é salvo em `~/.cache/margens-btg/margens.pdf` e reaproveitado por 6 horas. O servidor do BTG
 é lento: o download (~8 MB) costuma levar cerca de 2 minutos.
@@ -99,7 +102,7 @@ no dicionário `ATIVOS` em `scripts/listar_ativos.py`.
 
 Casos particulares já tratados:
 
-- Raiz diferente do ticker: `EMBJ` → EMBR3, `AXIA` → ex-ELET3/ELET6.
+- Raiz diferente do ticker antigo: `EMBJ` → EMBJ3 (ex-EMBR3), `AXIA` → ex-ELET3/ELET6 (dicionário `APELIDOS`).
 - Sufixos diferentes de 3/4/11: `CPLE6`, `USIM5`, `BRAP4`, `GGBR4`, `GOAU4`, `POMO4`, `CMIG4`, `ISAE4`.
 - Raízes com duas classes com opções (PETR3/PETR4, BBDC3/BBDC4, CMIG3/CMIG4, ITSA3/ITSA4) usam
   a mesma raiz no PDF; o script mostra a classe mais líquida.

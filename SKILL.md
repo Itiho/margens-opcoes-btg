@@ -23,7 +23,8 @@ python3 scripts/listar_ativos.py PETR4
 python3 scripts/listar_ativos.py VALE3 --tipo put --venc 11/2026   # MM/AAAA ou DD/MM/AAAA
 python3 scripts/listar_ativos.py VALE3 --venc 11/2026 --semana M   # W1, W2, W4, W5 ou M (mensal); aceita W1,M
 python3 scripts/listar_ativos.py BOVA11 --csv                      # também --json
-python3 scripts/listar_ativos.py PETR4 --sem-b3                    # não consulta a B3 (sem strike)
+python3 scripts/listar_ativos.py VALE3 --semana W2 --cotacao 60   # linha da cotação num valor dado
+python3 scripts/listar_ativos.py PETR4 --sem-b3                    # não consulta a B3 (sem strike/cotação)
 ```
 
 O ativo pode ser o ticker (`PETR4`, `PETR3`, `EMBR3`) ou a raiz (`PETR`, `EMBJ`).
@@ -37,6 +38,10 @@ O download leva ~2 minutos (≈8 MB, servidor lento) — use um timeout generoso
 ou até 7 dias antes), salvo filtrado em `~/.cache/margens-btg/instrumentos-AAAA-MM-DD.csv` (~2 MB).
 A API da B3 às vezes dá 504; o script tenta 3 vezes e, se falhar, segue com strike `?` e vencimento
 inferido pela letra. O PDF do BTG **não traz o strike** — só código e margem exigida.
+
+Em cada grupo (vencimento + CALL/PUT) uma linha `=== cotacao VALE3 R$ 64,67 ===` separa os strikes
+abaixo e acima da cotação atual (API `cotacao.b3.com.br`, atraso ~15 min; ticker do ativo-objeto
+tirado do cadastro da B3). `--cotacao VALOR` substitui; sem cotação, não há linha.
 
 ## Como o script identifica as coisas
 
@@ -57,7 +62,8 @@ inferido pela letra. O PDF do BTG **não traz o strike** — só código e marge
 
 Raízes novas (IPO, troca de nome, fusão) aparecem na saída como
 `XXXX? (nao identificado - raiz nova no PDF)`. Quando isso acontecer, acrescente a entrada em
-`ATIVOS` no script. Casos em que a raiz difere do ticker: `EMBJ` → EMBR3, `AXIA` → ex-ELET3/ELET6.
+`ATIVOS` no script. Casos em que a raiz difere do ticker antigo: `EMBJ` → EMBJ3 (ex-EMBR3), `AXIA` → ex-ELET3/ELET6;
+os tickers antigos ficam em `APELIDOS`.
 Sufixos que não são 3/4/11: `CPLE6`, `USIM5`, `BRAP4`, `GGBR4`, `GOAU4`, `POMO4`, `CMIG4`, `ISAE4`.
 Quando a raiz tem duas classes com opções (PETR3/PETR4, BBDC3/BBDC4, CMIG3/CMIG4, ITSA3/ITSA4),
 o PDF usa a mesma raiz para as duas e o script mostra a classe líquida.
