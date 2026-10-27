@@ -15,9 +15,12 @@ Uso:
     python3 listar_ativos.py PETR4 --venc 11/2026 --semana W1,M   # W1, W2, W4, W5 ou M (mensal)
 """
 import argparse, collections, csv, datetime as dt, json, os, re, shutil, subprocess, sys, tempfile
-import urllib.request
+import time, urllib.request
 
 URL = "https://investimentos.btgpactual.com/opcoes/margens/"
+# cadastro de instrumentos da B3 (strike e vencimento oficiais de cada serie)
+B3_URL = "https://arquivos.b3.com.br/api/download/requestname?fileName=InstrumentsConsolidatedFile&date={data}"
+B3_DOWNLOAD = "https://arquivos.b3.com.br/api/download/?token={token}"
 CACHE = os.path.join(os.path.expanduser("~"), ".cache", "margens-btg")
 
 # raiz de 4 caracteres da serie de opcoes -> (ticker do ativo-objeto, nome)
@@ -187,21 +190,74 @@ def raiz_do_ativo(ativo):
     return ativo[:4]
 
 
-def opcoes_do_ativo(texto, raiz, atualizado):
+def instrumentos_b3(data_ref, force=False):
+    """codigo -> {"strike", "vencimento", "estilo"}, do cadastro de instrumentos da B3.
+
+    Tenta a data do PDF e ate 7 dias antes. Guarda so as opcoes num CSV pequeno no cache.
+    Devolve {} se a B3 nao responder (o script segue com a inferencia pelo codigo).
+    """
+    base = data_ref or dt.date.today()
+    for atras in range(8):
+        data = base - dt.timedelta(days=atras)
+        cache = os.path.join(CACHE, f"instrumentos-{data.isoformat()}.csv")
+        if not os.path.exists(cache) or force:
+            print(f"# baixando cadastro de instrumentos da B3 de {data.strftime('%d/%m/%Y')}", file=sys.stderr)
+            for tentativa in range(1, 4):  # a API da B3 da 504 de vez em quando
+                try:
+                    req = urllib.request.Request(B3_URL.format(data=data.isoformat()), headers={"User-Agent": "Mozilla/5.0"})
+                    with urllib.request.urlopen(req, timeout=60) as r:
+                        token = json.load(r).get("token")
+                    linhas = []
+                    if token:
+                        req = urllib.request.Request(B3_DOWNLOAD.format(token=token), headers={"User-Agent": "Mozilla/5.0"})
+                        with urllib.request.urlopen(req, timeout=300) as r:
+                            linhas = r.read().decode("latin-1").splitlines()
+                    break
+                except Exception as e:  # rede fora, B3 instavel ou mudou a API
+                    if tentativa == 3:
+                        print(f"# aviso: cadastro da B3 indisponivel ({e}); seguindo sem strike", file=sys.stderr)
+                        return {}
+                    time.sleep(5 * tentativa)
+            # 1a linha: "Status do Arquivo: ..."; depois CSV com ';'
+            cab = next((i for i, l in enumerate(linhas) if l.startswith("RptDt;")), None)
+            if cab is None:
+                continue
+            os.makedirs(CACHE, exist_ok=True)
+            with open(cache + ".part", "w", newline="", encoding="utf-8") as f:
+                w = csv.writer(f)
+                w.writerow(["codigo", "strike", "vencimento", "estilo"])
+                for x in csv.DictReader(linhas[cab:], delimiter=";"):
+                    if x.get("ExrcPric") and x.get("XprtnDt") and SERIE_RE.fullmatch(x["TckrSymb"]):
+                        w.writerow([x["TckrSymb"], x["ExrcPric"].replace(",", "."), x["XprtnDt"], x.get("OptnStyle", "")])
+            os.replace(cache + ".part", cache)
+        with open(cache, encoding="utf-8") as f:
+            return {x["codigo"]: {"strike": float(x["strike"]),
+                                  "vencimento": dt.date.fromisoformat(x["vencimento"]),
+                                  "estilo": x["estilo"]} for x in csv.DictReader(f)}
+    print("# aviso: cadastro da B3 nao encontrado para os ultimos dias", file=sys.stderr)
+    return {}
+
+
+def opcoes_do_ativo(texto, raiz, atualizado, b3=None):
+    b3 = b3 or {}
     out = {}
     for codigo, r, letra, num, wk, valor in MARGEM_RE.findall(texto):
         if r != raiz or letra not in CALL + PUT:
             continue
-        venc = data_vencimento(letra, wk or "M", atualizado)
+        inst = b3.get(codigo)
         out[codigo] = {
             "codigo": codigo,
+            "strike": inst["strike"] if inst else None,
             "tipo": "CALL" if letra in CALL else "PUT",
-            "vencimento": venc,
+            # a B3 e a fonte oficial; sem ela, a data e inferida pela letra (pode errar ano e feriados)
+            "vencimento": inst["vencimento"] if inst else data_vencimento(letra, wk or "M", atualizado),
             "semanal": wk or "",
             "margem": float(valor.replace(",", "")),
-            "_num": num.ljust(3, "0"),  # 44 ~ 44,0 e 423 ~ 42,3: compara como decimal
+            "_num": num.ljust(3, "0"),  # sem strike: 44 ~ 44,0 e 423 ~ 42,3, compara como decimal
         }
-    ops = sorted(out.values(), key=lambda o: (o["vencimento"] or dt.date.max, o["tipo"], o["_num"], o["codigo"]))
+    ops = sorted(out.values(), key=lambda o: (o["vencimento"] or dt.date.max, o["tipo"],
+                                              o["strike"] if o["strike"] is not None else float("inf"),
+                                              o["_num"], o["codigo"]))
     for o in ops:
         del o["_num"]
     return ops
@@ -210,7 +266,8 @@ def opcoes_do_ativo(texto, raiz, atualizado):
 def imprimir_opcoes(a, texto, atualizado):
     raiz = raiz_do_ativo(a.ativo)
     ticker, nome = ATIVOS.get(raiz, (a.ativo.upper(), "(raiz nao cadastrada)"))
-    ops = opcoes_do_ativo(texto, raiz, atualizado)
+    b3 = {} if a.sem_b3 else instrumentos_b3(atualizado, a.force)
+    ops = opcoes_do_ativo(texto, raiz, atualizado, b3)
     if a.tipo:
         ops = [o for o in ops if o["tipo"] == a.tipo.upper()]
     if a.semana:
@@ -234,6 +291,7 @@ def imprimir_opcoes(a, texto, atualizado):
         sys.exit(f"nenhuma opcao encontrada para {a.ativo.upper()} (raiz {raiz}) com esses filtros")
 
     fmt = lambda d: d.strftime("%d/%m/%Y") if d else "-"
+    br = lambda v: f"{v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     if a.json:
         print(json.dumps({"atualizado": fmt(atualizado), "ativo": ticker, "nome": nome, "raiz": raiz,
                           "opcoes": [{**o, "vencimento": fmt(o["vencimento"])} for o in ops]},
@@ -241,25 +299,32 @@ def imprimir_opcoes(a, texto, atualizado):
         return
     if a.csv:
         w = csv.writer(sys.stdout)
-        w.writerow(["codigo", "tipo", "vencimento", "semanal", "margem"])
+        w.writerow(["codigo", "strike", "tipo", "vencimento", "semanal", "margem_exigida"])
         for o in ops:
-            w.writerow([o["codigo"], o["tipo"], fmt(o["vencimento"]), o["semanal"], f"{o['margem']:.2f}"])
+            w.writerow([o["codigo"], "" if o["strike"] is None else f"{o['strike']:.2f}", o["tipo"],
+                        fmt(o["vencimento"]), o["semanal"], f"{o['margem']:.2f}"])
         return
 
     print(f"\n{ticker} - {nome} | raiz {raiz} | atualizado em: {fmt(atualizado)} | {len(ops)} series")
-    print("-" * 52)
-    print(f"{'CODIGO':<12} {'TIPO':<5} {'VENCIMENTO':<11} {'SEM':<4} {'MARGEM (R$)':>14}")
-    print("-" * 52)
+    print("-" * 66)
+    print(f"{'CODIGO':<12} {'STRIKE':>8}  {'TIPO':<5} {'VENCIMENTO':<11} {'SEM':<4} {'MARGEM EXIGIDA':>20}")
+    print("-" * 66)
     anterior = None
     for o in ops:
         if anterior and o["vencimento"] != anterior:
             print()
         anterior = o["vencimento"]
-        print(f"{o['codigo']:<12} {o['tipo']:<5} {fmt(o['vencimento']):<11} {o['semanal']:<4} "
-              f"{o['margem']:>14,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
-    print("-" * 52)
-    print("MARGEM = margem exigida por opcao vendida (R$). O PDF nao traz o strike; o numero no\n"
-          "codigo so lembra o strike (VALEK353 ~ 35,30) e nao acompanha ajustes por proventos.")
+        strike = "?" if o["strike"] is None else br(o["strike"])
+        print(f"{o['codigo']:<12} {strike:>8}  {o['tipo']:<5} {fmt(o['vencimento']):<11} {o['semanal']:<4} "
+              f"{'R$ ' + br(o['margem']):>20}")
+    print("-" * 66)
+    print("MARGEM EXIGIDA = garantia bloqueada por opcao vendida (R$), do PDF do BTG.")
+    sem = sum(o["strike"] is None for o in ops)
+    if sem == len(ops):
+        print("STRIKE e VENCIMENTO: sem o cadastro da B3; vencimento inferido pela letra do codigo (pode errar).")
+    else:
+        print("STRIKE e VENCIMENTO: cadastro de instrumentos da B3."
+              + (f" {sem} serie(s) fora do cadastro: '?' e data inferida." if sem else ""))
 
 
 def calendario(por_venc, atualizado):
@@ -291,6 +356,7 @@ def main():
     ap.add_argument("--tipo", choices=["call", "put"], help="com ATIVO: filtra calls ou puts")
     ap.add_argument("--semana", help="com ATIVO: W1, W2, W4, W5 ou M (mensal); aceita lista, ex.: W1,M")
     ap.add_argument("--venc", help="com ATIVO: filtra pelo vencimento (MM/AAAA ou DD/MM/AAAA)")
+    ap.add_argument("--sem-b3", action="store_true", help="com ATIVO: nao consulta a B3 (sem strike; vencimento inferido)")
     ap.add_argument("--pdf", help="usa um PDF local em vez de baixar")
     ap.add_argument("--force", action="store_true", help="ignora o cache e baixa de novo")
     ap.add_argument("--vencimentos", action="store_true", help="imprime tambem o calendario de vencimentos")

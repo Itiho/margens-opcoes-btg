@@ -44,20 +44,27 @@ python3 scripts/listar_ativos.py PETR4
 python3 scripts/listar_ativos.py VALE3 --tipo put --venc 11/2026   # --venc aceita MM/AAAA ou DD/MM/AAAA
 python3 scripts/listar_ativos.py VALE3 --venc 11/2026 --semana M   # W1, W2, W4, W5 ou M (mensal); aceita W1,M
 python3 scripts/listar_ativos.py BOVA11 --csv                      # também --json
+python3 scripts/listar_ativos.py PETR4 --sem-b3                    # não consulta a B3 (sem strike)
 ```
 
+`PETR4 --tipo put --venc 11/2026 --semana W1`:
+
 ```
-PETR4 - Petrobras PN | raiz PETR | atualizado em: 26/10/2026 | 251 series   (--tipo put --venc 11/2026)
-----------------------------------------------------
-CODIGO       TIPO  VENCIMENTO  SEM     MARGEM (R$)
-----------------------------------------------------
-PETRW423W1   PUT   06/11/2026  W1             2,91
-PETRW425W1   PUT   06/11/2026  W1             3,04
+PETR4 - Petrobras PN | raiz PETR | atualizado em: 26/10/2026 | 41 series
+------------------------------------------------------------------
+CODIGO         STRIKE  TIPO  VENCIMENTO  SEM        MARGEM EXIGIDA
+------------------------------------------------------------------
+PETRW423W1      41,11  PUT   06/11/2026  W1                R$ 2,91
+PETRW425W1      41,36  PUT   06/11/2026  W1                R$ 3,04
 ...
 ```
 
-A coluna MARGEM é a margem exigida por opção vendida, em R$ (é o que o PDF traz). O número no código
-lembra o strike (`VALEK353` ≈ 35,30), mas é só o código da série na B3 e não acompanha ajustes por proventos.
+- **MARGEM EXIGIDA**: garantia que o BTG bloqueia por opção vendida, em R$ (único valor que o PDF traz).
+  Vender 100 opções com margem R$ 19,51 bloqueia ~R$ 1.951.
+- **STRIKE** e **VENCIMENTO**: do cadastro de instrumentos da B3 (`InstrumentsConsolidatedFile`), baixado
+  da data do PDF e guardado filtrado em `~/.cache/margens-btg/instrumentos-AAAA-MM-DD.csv` (~2 MB).
+  Se a B3 estiver fora (a API dá 504 às vezes; o script tenta 3 vezes), o strike sai `?` e o
+  vencimento é inferido pela letra do código.
 
 O PDF é salvo em `~/.cache/margens-btg/margens.pdf` e reaproveitado por 6 horas. O servidor do BTG
 é lento: o download (~8 MB) costuma levar cerca de 2 minutos.
@@ -65,13 +72,14 @@ O PDF é salvo em `~/.cache/margens-btg/margens.pdf` e reaproveitado por 6 horas
 ## Como funciona
 
 - A URL de margens **devolve o PDF diretamente** (`Content-Type: application/pdf`); não há HTML para raspar.
-- Cada código de opção segue o formato `RAIZ(4) + LETRA + STRIKE [+ W<n>]`, por exemplo `PETRJ350`
+- Cada código de opção segue o formato `RAIZ(4) + LETRA + NÚMERO [+ W<n>]`, por exemplo `PETRJ350`
   ou `BPACV516W4`. A raiz identifica o ativo-objeto, e o dicionário `ATIVOS` no script mapeia
-  raiz → ticker + nome.
+  raiz → ticker + nome. O número **não é o strike** (`VALEK353` = 35,39; `BOVAJ1` = 178,00).
 - A letra codifica mês e tipo: `A–L` = call de jan a dez, `M–X` = put de jan a dez. O ano não aparece
-  no PDF; ele é inferido a partir da data "Atualizado em:" do próprio arquivo.
+  no PDF; por isso o vencimento oficial vem da B3 (há séries de 2027 com a mesma letra das de 2026).
 - Vencimento mensal = 3ª sexta-feira do mês. Séries semanais `W1/W2/W4/W5` vencem nas demais sextas
-  (`W3` não existe). Se a sexta for feriado na B3, o vencimento passa para o dia útil seguinte.
+  (`W3` não existe). Se a sexta for feriado, a B3 antecipa para o dia útil anterior (20/11/2026 → 19/11).
+- O calendário de `--vencimentos` (listagem geral) ainda usa só a inferência pela letra.
 
 ## Estrutura
 

@@ -18,11 +18,12 @@ python3 scripts/listar_ativos.py --json
 python3 scripts/listar_ativos.py --pdf ARQ.pdf   # usa um PDF local (não baixa)
 python3 scripts/listar_ativos.py --force         # ignora o cache
 
-# séries de um ativo: código, CALL/PUT, data de vencimento, semanal e margem (R$)
+# séries de um ativo: código, strike, CALL/PUT, vencimento, semanal e margem exigida (R$)
 python3 scripts/listar_ativos.py PETR4
 python3 scripts/listar_ativos.py VALE3 --tipo put --venc 11/2026   # MM/AAAA ou DD/MM/AAAA
 python3 scripts/listar_ativos.py VALE3 --venc 11/2026 --semana M   # W1, W2, W4, W5 ou M (mensal); aceita W1,M
 python3 scripts/listar_ativos.py BOVA11 --csv                      # também --json
+python3 scripts/listar_ativos.py PETR4 --sem-b3                    # não consulta a B3 (sem strike)
 ```
 
 O ativo pode ser o ticker (`PETR4`, `PETR3`, `EMBR3`) ou a raiz (`PETR`, `EMBJ`).
@@ -32,17 +33,25 @@ Requisito: `pdftotext` (pacote `poppler-utils`). Sem dependências Python extern
 O PDF é salvo em `~/.cache/margens-btg/margens.pdf` e reaproveitado por 6 horas.
 O download leva ~2 minutos (≈8 MB, servidor lento) — use um timeout generoso.
 
+**Strike e vencimento** vêm do cadastro de instrumentos da B3 (`InstrumentsConsolidatedFile`, data do PDF
+ou até 7 dias antes), salvo filtrado em `~/.cache/margens-btg/instrumentos-AAAA-MM-DD.csv` (~2 MB).
+A API da B3 às vezes dá 504; o script tenta 3 vezes e, se falhar, segue com strike `?` e vencimento
+inferido pela letra. O PDF do BTG **não traz o strike** — só código e margem exigida.
+
 ## Como o script identifica as coisas
 
 - A URL `https://investimentos.btgpactual.com/opcoes/margens/` **devolve o PDF direto**
   (`Content-Type: application/pdf`); não há página HTML para raspar.
-- Cada código na tabela é `RAIZ(4) + LETRA + STRIKE [+ W<n>]`, ex. `PETRJ350`, `BPACV516W4`.
+- Cada código na tabela é `RAIZ(4) + LETRA + NÚMERO [+ W<n>]`, ex. `PETRJ350`, `BPACV516W4`. O número
+  **não é o strike** (só lembra: `VALEK353` = 35,39; `BOVAJ1` = 178,00) — o strike vem da B3.
   A raiz identifica o ativo-objeto; o dicionário `ATIVOS` no script mapeia raiz → ticker + nome.
 - A letra codifica mês e tipo: `A–L` = call jan–dez, `M–X` = put jan–dez. O ano **não** está
-  no PDF — é inferido pela escada de 12 meses a partir do "Atualizado em:" do próprio arquivo.
+  no PDF. Sem a B3, é inferido pela escada de 12 meses a partir do "Atualizado em:" — e erra para
+  séries longas (ex.: `PETRJ5` e `BOVAJ1` vencem em 15/10/**2027**, não 2026).
 - Vencimento mensal = 3ª sexta-feira; `W1/W2/W4/W5` = as outras sextas do mês (`W3` não existe,
-  é a semana do mensal). Se a sexta for feriado na B3, o vencimento vai para o dia útil seguinte
-  (ex.: 20/11 — Consciência Negra).
+  é a semana do mensal). Se a sexta for feriado, a B3 **antecipa** para o dia útil anterior
+  (ex.: VALEK de nov/2026 vence em 19/11, porque 20/11 é Consciência Negra). A inferência sem B3
+  não trata feriados; o calendário de `--vencimentos` também usa só a inferência.
 
 ## Manutenção
 
