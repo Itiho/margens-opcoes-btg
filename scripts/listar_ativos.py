@@ -12,6 +12,7 @@ Uso:
     python3 listar_ativos.py --force         # ignora o cache e baixa de novo
     python3 listar_ativos.py PETR4           # series de opcoes de um ativo, com vencimento e margem
     python3 listar_ativos.py PETR4 --tipo put --venc 11/2026
+    python3 listar_ativos.py PETR4 --venc 11/2026 --semana W1,M   # W1, W2, W4, W5 ou M (mensal)
 """
 import argparse, collections, csv, datetime as dt, json, os, re, shutil, subprocess, sys, tempfile
 import urllib.request
@@ -212,6 +213,13 @@ def imprimir_opcoes(a, texto, atualizado):
     ops = opcoes_do_ativo(texto, raiz, atualizado)
     if a.tipo:
         ops = [o for o in ops if o["tipo"] == a.tipo.upper()]
+    if a.semana:
+        sem = {x.strip().upper() for x in a.semana.split(",")}
+        sem = {"" if x in ("M", "MENSAL") else x for x in sem}
+        invalidas = sem - {"", "W1", "W2", "W4", "W5"}
+        if invalidas:
+            sys.exit(f"erro: --semana invalida: {', '.join(sorted(invalidas))} (use W1, W2, W4, W5 ou M)")
+        ops = [o for o in ops if o["semanal"] in sem]
     if a.venc:
         m = re.fullmatch(r"(\d{1,2})/(\d{4})|(\d{2})/(\d{2})/(\d{4})", a.venc)
         if not m:
@@ -250,7 +258,8 @@ def imprimir_opcoes(a, texto, atualizado):
         print(f"{o['codigo']:<12} {o['tipo']:<5} {fmt(o['vencimento']):<11} {o['semanal']:<4} "
               f"{o['margem']:>14,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
     print("-" * 52)
-    print("O numero no codigo e o da serie na B3, nao o strike (o PDF nao traz o strike).")
+    print("MARGEM = margem exigida por opcao vendida (R$). O PDF nao traz o strike; o numero no\n"
+          "codigo so lembra o strike (VALEK353 ~ 35,30) e nao acompanha ajustes por proventos.")
 
 
 def calendario(por_venc, atualizado):
@@ -280,6 +289,7 @@ def main():
     ap = argparse.ArgumentParser(description="Lista os ativos-objeto do PDF de margens de opcoes do BTG.")
     ap.add_argument("ativo", nargs="?", help="ticker ou raiz (ex.: PETR4, VALE3, BOVA11, PETR) - lista as series dele")
     ap.add_argument("--tipo", choices=["call", "put"], help="com ATIVO: filtra calls ou puts")
+    ap.add_argument("--semana", help="com ATIVO: W1, W2, W4, W5 ou M (mensal); aceita lista, ex.: W1,M")
     ap.add_argument("--venc", help="com ATIVO: filtra pelo vencimento (MM/AAAA ou DD/MM/AAAA)")
     ap.add_argument("--pdf", help="usa um PDF local em vez de baixar")
     ap.add_argument("--force", action="store_true", help="ignora o cache e baixa de novo")
@@ -287,8 +297,8 @@ def main():
     ap.add_argument("--csv", action="store_true")
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args()
-    if (a.tipo or a.venc) and not a.ativo:
-        ap.error("--tipo e --venc exigem um ATIVO (ex.: PETR4)")
+    if (a.tipo or a.venc or a.semana) and not a.ativo:
+        ap.error("--tipo, --semana e --venc exigem um ATIVO (ex.: PETR4)")
 
     pdf = a.pdf or baixar(a.force)
     texto = extrair_texto(pdf)

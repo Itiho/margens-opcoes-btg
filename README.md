@@ -42,6 +42,7 @@ Passe o ticker (ou a raiz de 4 letras) para listar todas as séries dele com tip
 ```bash
 python3 scripts/listar_ativos.py PETR4
 python3 scripts/listar_ativos.py VALE3 --tipo put --venc 11/2026   # --venc aceita MM/AAAA ou DD/MM/AAAA
+python3 scripts/listar_ativos.py VALE3 --venc 11/2026 --semana M   # W1, W2, W4, W5 ou M (mensal); aceita W1,M
 python3 scripts/listar_ativos.py BOVA11 --csv                      # também --json
 ```
 
@@ -55,7 +56,8 @@ PETRW425W1   PUT   06/11/2026  W1             3,04
 ...
 ```
 
-O número no código é o da série na B3, não o strike: o PDF traz só o código e a margem.
+A coluna MARGEM é a margem exigida por opção vendida, em R$ (é o que o PDF traz). O número no código
+lembra o strike (`VALEK353` ≈ 35,30), mas é só o código da série na B3 e não acompanha ajustes por proventos.
 
 O PDF é salvo em `~/.cache/margens-btg/margens.pdf` e reaproveitado por 6 horas. O servidor do BTG
 é lento: o download (~8 MB) costuma levar cerca de 2 minutos.

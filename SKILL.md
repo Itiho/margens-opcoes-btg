@@ -21,6 +21,7 @@ python3 scripts/listar_ativos.py --force         # ignora o cache
 # séries de um ativo: código, CALL/PUT, data de vencimento, semanal e margem (R$)
 python3 scripts/listar_ativos.py PETR4
 python3 scripts/listar_ativos.py VALE3 --tipo put --venc 11/2026   # MM/AAAA ou DD/MM/AAAA
+python3 scripts/listar_ativos.py VALE3 --venc 11/2026 --semana M   # W1, W2, W4, W5 ou M (mensal); aceita W1,M
 python3 scripts/listar_ativos.py BOVA11 --csv                      # também --json
 ```
 
