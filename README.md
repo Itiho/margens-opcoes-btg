@@ -35,6 +35,28 @@ python3 scripts/listar_ativos.py --pdf ARQ.pdf   # usa um PDF local (não baixa)
 python3 scripts/listar_ativos.py --force         # ignora o cache e baixa de novo
 ```
 
+### Opções de um ativo
+
+Passe o ticker (ou a raiz de 4 letras) para listar todas as séries dele com tipo, vencimento e margem:
+
+```bash
+python3 scripts/listar_ativos.py PETR4
+python3 scripts/listar_ativos.py VALE3 --tipo put --venc 11/2026   # --venc aceita MM/AAAA ou DD/MM/AAAA
+python3 scripts/listar_ativos.py BOVA11 --csv                      # também --json
+```
+
+```
+PETR4 - Petrobras PN | raiz PETR | atualizado em: 26/10/2026 | 251 series
+----------------------------------------------------
+CODIGO       TIPO  VENCIMENTO  SEM     MARGEM (R$)
+----------------------------------------------------
+PETRW423W1   PUT   06/11/2026  W1             2,91
+PETRW425W1   PUT   06/11/2026  W1             3,04
+...
+```
+
+O número no código é o da série na B3, não o strike: o PDF traz só o código e a margem.
+
 O PDF é salvo em `~/.cache/margens-btg/margens.pdf` e reaproveitado por 6 horas. O servidor do BTG
 é lento: o download (~8 MB) costuma levar cerca de 2 minutos.
 

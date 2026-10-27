@@ -17,7 +17,14 @@ python3 scripts/listar_ativos.py --csv           # CSV: ticker,nome,raiz_opcao,s
 python3 scripts/listar_ativos.py --json
 python3 scripts/listar_ativos.py --pdf ARQ.pdf   # usa um PDF local (não baixa)
 python3 scripts/listar_ativos.py --force         # ignora o cache
+
+# séries de um ativo: código, CALL/PUT, data de vencimento, semanal e margem (R$)
+python3 scripts/listar_ativos.py PETR4
+python3 scripts/listar_ativos.py VALE3 --tipo put --venc 11/2026   # MM/AAAA ou DD/MM/AAAA
+python3 scripts/listar_ativos.py BOVA11 --csv                      # também --json
 ```
+
+O ativo pode ser o ticker (`PETR4`, `PETR3`, `EMBR3`) ou a raiz (`PETR`, `EMBJ`).
 
 Requisito: `pdftotext` (pacote `poppler-utils`). Sem dependências Python externas.
 

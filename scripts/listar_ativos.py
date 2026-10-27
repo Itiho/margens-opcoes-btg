@@ -10,6 +10,8 @@ Uso:
     python3 listar_ativos.py --json
     python3 listar_ativos.py --pdf ARQ.pdf   # usa um PDF local em vez de baixar
     python3 listar_ativos.py --force         # ignora o cache e baixa de novo
+    python3 listar_ativos.py PETR4           # series de opcoes de um ativo, com vencimento e margem
+    python3 listar_ativos.py PETR4 --tipo put --venc 11/2026
 """
 import argparse, collections, csv, datetime as dt, json, os, re, shutil, subprocess, sys, tempfile
 import urllib.request
@@ -101,6 +103,7 @@ ATIVOS = {
 }
 
 SERIE_RE = re.compile(r"\b([A-Z0-9]{4})([A-Z])([0-9]{1,3})(W[0-9])?\b")
+MARGEM_RE = re.compile(r"\b(([A-Z0-9]{4})([A-Z])([0-9]{1,3})(W[0-9])?)\s+R\$\s*([0-9.,]+)")
 CALL, PUT = "ABCDEFGHIJKL", "MNOPQRSTUVWX"   # A=jan..L=dez (call), M=jan..X=dez (put)
 MESES = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
 
@@ -159,6 +162,97 @@ def sextas(ano, mes):
     return out
 
 
+def data_vencimento(letra, wk, atualizado):
+    """(letra, 'W1'|'W2'|'M'|'W4'|'W5') -> date, pela escada de 12 meses a partir do arquivo."""
+    base = atualizado or dt.date.today()
+    mes = (CALL + PUT).index(letra) % 12 + 1
+    ano = base.year + (1 if mes < base.month else 0)
+    fr = sextas(ano, mes)
+    n = 3 if wk == "M" else int(wk[1])
+    return fr[n - 1] if n <= len(fr) else None
+
+
+def raiz_do_ativo(ativo):
+    ativo = ativo.upper()
+    if ativo in ATIVOS:
+        return ativo
+    for raiz, (ticker, _nome) in ATIVOS.items():
+        if ticker == ativo:
+            return raiz
+    # PETR3, BBDC3 etc.: mesma raiz da classe liquida; EMBR3 -> EMBJ
+    for raiz, (ticker, _nome) in ATIVOS.items():
+        if ticker.rstrip("0123456789") == ativo.rstrip("0123456789"):
+            return raiz
+    return ativo[:4]
+
+
+def opcoes_do_ativo(texto, raiz, atualizado):
+    out = {}
+    for codigo, r, letra, num, wk, valor in MARGEM_RE.findall(texto):
+        if r != raiz or letra not in CALL + PUT:
+            continue
+        venc = data_vencimento(letra, wk or "M", atualizado)
+        out[codigo] = {
+            "codigo": codigo,
+            "tipo": "CALL" if letra in CALL else "PUT",
+            "vencimento": venc,
+            "semanal": wk or "",
+            "margem": float(valor.replace(",", "")),
+            "_num": num.ljust(3, "0"),  # 44 ~ 44,0 e 423 ~ 42,3: compara como decimal
+        }
+    ops = sorted(out.values(), key=lambda o: (o["vencimento"] or dt.date.max, o["tipo"], o["_num"], o["codigo"]))
+    for o in ops:
+        del o["_num"]
+    return ops
+
+
+def imprimir_opcoes(a, texto, atualizado):
+    raiz = raiz_do_ativo(a.ativo)
+    ticker, nome = ATIVOS.get(raiz, (a.ativo.upper(), "(raiz nao cadastrada)"))
+    ops = opcoes_do_ativo(texto, raiz, atualizado)
+    if a.tipo:
+        ops = [o for o in ops if o["tipo"] == a.tipo.upper()]
+    if a.venc:
+        m = re.fullmatch(r"(\d{1,2})/(\d{4})|(\d{2})/(\d{2})/(\d{4})", a.venc)
+        if not m:
+            sys.exit("erro: --venc deve ser MM/AAAA ou DD/MM/AAAA")
+        if m.group(1):
+            mes, ano = int(m.group(1)), int(m.group(2))
+            ops = [o for o in ops if o["vencimento"] and (o["vencimento"].month, o["vencimento"].year) == (mes, ano)]
+        else:
+            alvo = dt.date(int(m.group(5)), int(m.group(4)), int(m.group(3)))
+            ops = [o for o in ops if o["vencimento"] == alvo]
+    if not ops:
+        sys.exit(f"nenhuma opcao encontrada para {a.ativo.upper()} (raiz {raiz}) com esses filtros")
+
+    fmt = lambda d: d.strftime("%d/%m/%Y") if d else "-"
+    if a.json:
+        print(json.dumps({"atualizado": fmt(atualizado), "ativo": ticker, "nome": nome, "raiz": raiz,
+                          "opcoes": [{**o, "vencimento": fmt(o["vencimento"])} for o in ops]},
+                         ensure_ascii=False, indent=2))
+        return
+    if a.csv:
+        w = csv.writer(sys.stdout)
+        w.writerow(["codigo", "tipo", "vencimento", "semanal", "margem"])
+        for o in ops:
+            w.writerow([o["codigo"], o["tipo"], fmt(o["vencimento"]), o["semanal"], f"{o['margem']:.2f}"])
+        return
+
+    print(f"\n{ticker} - {nome} | raiz {raiz} | atualizado em: {fmt(atualizado)} | {len(ops)} series")
+    print("-" * 52)
+    print(f"{'CODIGO':<12} {'TIPO':<5} {'VENCIMENTO':<11} {'SEM':<4} {'MARGEM (R$)':>14}")
+    print("-" * 52)
+    anterior = None
+    for o in ops:
+        if anterior and o["vencimento"] != anterior:
+            print()
+        anterior = o["vencimento"]
+        print(f"{o['codigo']:<12} {o['tipo']:<5} {fmt(o['vencimento']):<11} {o['semanal']:<4} "
+              f"{o['margem']:>14,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+    print("-" * 52)
+    print("O numero no codigo e o da serie na B3, nao o strike (o PDF nao traz o strike).")
+
+
 def calendario(por_venc, atualizado):
     """Escada de 12 meses a partir do mes do arquivo; mensal = 3a sexta, semanais = as outras."""
     base = atualizado or dt.date.today()
@@ -184,15 +278,24 @@ def calendario(por_venc, atualizado):
 
 def main():
     ap = argparse.ArgumentParser(description="Lista os ativos-objeto do PDF de margens de opcoes do BTG.")
+    ap.add_argument("ativo", nargs="?", help="ticker ou raiz (ex.: PETR4, VALE3, BOVA11, PETR) - lista as series dele")
+    ap.add_argument("--tipo", choices=["call", "put"], help="com ATIVO: filtra calls ou puts")
+    ap.add_argument("--venc", help="com ATIVO: filtra pelo vencimento (MM/AAAA ou DD/MM/AAAA)")
     ap.add_argument("--pdf", help="usa um PDF local em vez de baixar")
     ap.add_argument("--force", action="store_true", help="ignora o cache e baixa de novo")
     ap.add_argument("--vencimentos", action="store_true", help="imprime tambem o calendario de vencimentos")
     ap.add_argument("--csv", action="store_true")
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args()
+    if (a.tipo or a.venc) and not a.ativo:
+        ap.error("--tipo e --venc exigem um ATIVO (ex.: PETR4)")
 
     pdf = a.pdf or baixar(a.force)
-    por_ativo, por_venc, atualizado, total = analisar(extrair_texto(pdf))
+    texto = extrair_texto(pdf)
+    por_ativo, por_venc, atualizado, total = analisar(texto)
+    if a.ativo:
+        imprimir_opcoes(a, texto, atualizado)
+        return
 
     itens = []
     for raiz in sorted(por_ativo):
